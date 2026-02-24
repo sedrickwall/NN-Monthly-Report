@@ -208,9 +208,40 @@ def fetch_google_sheet_data() -> pd.DataFrame:
             return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
         
         df = pd.DataFrame(data, columns=header)
-        
+
+        # Normalize column names: map common variants to canonical names
+        col_map = {}
+        for c in df.columns:
+            key = c.strip().lower().replace(" ", "_")
+            if key in ("snapshot_date", "snapshotdate", "date", "snapshot"):
+                col_map[c] = "snapshot_date"
+            elif "active_count" in key or ("active" in key and "count" in key):
+                col_map[c] = "active_count"
+            elif "active_amount" in key or ("active" in key and "amount" in key):
+                col_map[c] = "active_amount"
+            elif "cro_count" in key or ("cro" in key and "count" in key):
+                col_map[c] = "cro_count"
+            elif "cro_amount" in key or ("cro" in key and "amount" in key) or "croupdate" in key:
+                col_map[c] = "cro_amount"
+            elif "direct_count" in key or ("direct" in key and "count" in key):
+                col_map[c] = "direct_count"
+            elif "direct_amount" in key or ("direct" in key and "amount" in key):
+                col_map[c] = "direct_amount"
+            elif "hold_count" in key or ("hold" in key and "count" in key):
+                col_map[c] = "hold_count"
+            elif "hold_amount" in key or ("hold" in key and "amount" in key):
+                col_map[c] = "hold_amount"
+            elif key in ("age",):
+                col_map[c] = "age"
+            elif key in ("active", "croupdate", "directupdate", "hold", "count"):
+                # already narrow-format names
+                col_map[c] = key
+
+        if col_map:
+            df = df.rename(columns=col_map)
+
         # Check if this is wide format (has active_count, etc.)
-        if "active_count" in df.columns:
+        if "active_count" in df.columns or (set(["active_amount", "cro_amount", "direct_amount", "hold_amount"]) & set(df.columns)):
             # Convert from wide format
             df = validate_and_convert_wide(df)
         elif "active" in df.columns:
@@ -265,7 +296,7 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -
     ]
     
     for metric in metrics:
-        pdf.cell(0, 6, f"• {metric}", ln=True)
+        pdf.cell(0, 6, f"- {metric}", ln=True)
     
     pdf.ln(5)
     
@@ -279,7 +310,7 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -
         for age in age_summary.index:
             row = age_summary.loc[age]
             total = row.sum()
-            pdf.cell(0, 5, f"{age}: ${total:,.0f} (Active: ${row['active']:,.0f})", ln=True)
+            pdf.cell(0, 5, f"  {age}: ${total:,.0f} (Active: ${row['active']:,.0f})", ln=True)
     except:
         pdf.cell(0, 5, "Age bucket data unavailable", ln=True)
     
@@ -462,13 +493,27 @@ if not hist.empty:
             use_container_width=True
         )
 
+# Quick history check in main area to confirm multiple weeks are present
+st.subheader("History check")
+st.write("History rows", len(hist))
+st.write("Unique snapshot dates", hist["snapshot_date"].nunique() if "snapshot_date" in hist.columns else "missing")
+st.dataframe(
+    hist.sort_values("snapshot_date").tail(10),
+    use_container_width=True
+)
+
 if st.sidebar.button("Append this snapshot to history"):
     # IMPORTANT: df must be validated and in canonical age order
+    # Warn if we're about to overwrite an existing snapshot_date for these ages
+    existing_dates = set(pd.to_datetime(hist["snapshot_date"], errors="coerce").dt.date.dropna().tolist()) if len(hist) else set()
+    if snapshot_date in existing_dates:
+        st.sidebar.warning("This snapshot date already exists. Appending will update/overwrite that week for matching age buckets.")
+
     hist2 = append_snapshot(hist, df, snapshot_date)
     save_history(hist2)
     st.sidebar.success(f"Saved snapshot for {snapshot_date}. History rows: {len(hist2):,}")
-    hist = hist2  # refresh
-    hist = hist2  # refresh in-memory
+    # Refresh UI so the new history is visible immediately
+    st.experimental_rerun()
 
 if st.sidebar.button("Delete history file (reset)"):
     if HISTORY_PATH.exists():
