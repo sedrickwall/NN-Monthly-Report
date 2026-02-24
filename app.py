@@ -127,6 +127,21 @@ def monthly_totals(monthly_df: pd.DataFrame) -> pd.DataFrame:
     out["holdPct"] = (out["hold"] / out["totalValue"] * 100).round(2).fillna(0)
     return out
 
+def weekly_totals(hist: pd.DataFrame) -> pd.DataFrame:
+    """Weekly totals across all age buckets."""
+    h = hist.copy()
+    h["snapshot_date"] = pd.to_datetime(h["snapshot_date"], errors="coerce")
+    h = h.dropna(subset=["snapshot_date"])
+
+    h["totalValue"] = h["active"] + h["croUpdate"] + h["directUpdate"] + h["hold"]
+    out = h.groupby("snapshot_date", as_index=False)[
+        ["active", "croUpdate", "directUpdate", "hold", "count", "totalValue"]
+    ].sum()
+
+    out["updatesNeeded"] = out["croUpdate"] + out["directUpdate"]
+    out["activePct"] = (out["active"] / out["totalValue"] * 100).round(2).fillna(0)
+    return out.sort_values("snapshot_date")
+
 
 # ----------------------------
 # Helpers
@@ -363,11 +378,28 @@ snapshot_date = st.sidebar.date_input("Snapshot date (week ending)", value=pd.Ti
 
 hist = load_history()
 
+# Normalize snapshot_date in history
+if not hist.empty:
+    hist["snapshot_date"] = pd.to_datetime(hist["snapshot_date"], errors="coerce")
+    hist = hist.dropna(subset=["snapshot_date"])
+    hist = hist.sort_values("snapshot_date")
+
+# Debug: Show history stats
+if not hist.empty:
+    with st.sidebar.expander("📊 History Debug Info"):
+        st.write("**History rows:**", len(hist))
+        st.write("**Unique snapshot dates:**", hist["snapshot_date"].nunique())
+        st.dataframe(
+            hist.sort_values("snapshot_date")[["snapshot_date", "age", "active", "croUpdate", "directUpdate", "hold", "count"]].tail(10),
+            use_container_width=True
+        )
+
 if st.sidebar.button("Append this snapshot to history"):
     # IMPORTANT: df must be validated and in canonical age order
     hist2 = append_snapshot(hist, df, snapshot_date)
     save_history(hist2)
     st.sidebar.success(f"Saved snapshot for {snapshot_date}. History rows: {len(hist2):,}")
+    hist = hist2  # refresh
     hist = hist2  # refresh in-memory
 
 if st.sidebar.button("Delete history file (reset)"):
@@ -520,51 +552,96 @@ with b2:
 
 st.divider()
 
-st.header("Trends (Jan–Dec)")
+st.header("Trends")
 
 if len(hist) == 0:
     st.info("No history yet. Upload a week and click 'Append this snapshot to history'.")
 else:
-    monthly = monthly_rollup_end_of_month(hist)
-    mt = monthly_totals(monthly)
+    # Show trends based on view mode
+    if view_mode == "Trend by week":
+        st.subheader("Weekly Trends")
+        wt = weekly_totals(hist)
+        
+        if len(wt) > 1:
+            # Total pipeline trend by week
+            fig_week_total = px.line(
+                wt,
+                x="snapshot_date",
+                y="totalValue",
+                markers=True,
+                labels={"totalValue": "Total Pipeline ($)", "snapshot_date": "Week"}
+            )
+            fig_week_total.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:$,.0f}<extra></extra>")
+            st.plotly_chart(fig_week_total, use_container_width=True)
 
-    # Total pipeline trend
-    fig_total = px.line(mt, x="month", y="totalValue", markers=True, labels={"totalValue":"Total Pipeline ($)"})
-    fig_total.update_traces(hovertemplate="<b>%{x}</b><br>Total: %{y:$,.0f}<extra></extra>")
-    fig_total.update_xaxes(hoverformat="%B %Y")
-    st.plotly_chart(fig_total, use_container_width=True)
+            # Weekly mix
+            mix = wt.melt(
+                id_vars=["snapshot_date"],
+                value_vars=["active", "updatesNeeded", "hold"],
+                var_name="metric",
+                value_name="value"
+            )
+            label_map = {"active": "Active", "updatesNeeded": "Updates Needed", "hold": "Hold"}
+            mix["metric"] = mix["metric"].map(label_map)
 
-    # Mix trend (%)
-    pct_long = mt.melt(
-        id_vars=["month"],
-        value_vars=["activePct", "updatesPct", "holdPct"],
-        var_name="metric",
-        value_name="pct",
-    )
-    metric_labels = {"activePct":"Active %", "updatesPct":"Updates Needed %", "holdPct":"Hold %"}
-    pct_long["metric"] = pct_long["metric"].map(metric_labels)
-
-    fig_mix = px.line(pct_long, x="month", y="pct", color="metric", markers=True, labels={"pct":"Percent"})
-    fig_mix.update_traces(hovertemplate="<b>%{x}</b><br>%{legendgroup}: %{y:.2f}%<extra></extra>")
-    fig_mix.update_xaxes(hoverformat="%B %Y")
-    st.plotly_chart(fig_mix, use_container_width=True)
-
-    # Age bucket totals heatmap (optional but powerful)
-    monthly2 = monthly.copy()
-    monthly2["totalValueBucket"] = monthly2["active"] + monthly2["croUpdate"] + monthly2["directUpdate"] + monthly2["hold"]
-
-    pivot = monthly2.pivot_table(index="age", columns="month", values="totalValueBucket", aggfunc="sum").fillna(0)
+            fig_week_mix = px.line(
+                mix,
+                x="snapshot_date",
+                y="value",
+                color="metric",
+                markers=True,
+                labels={"value": "Value ($)", "snapshot_date": "Week", "metric": ""}
+            )
+            fig_week_mix.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
+            st.plotly_chart(fig_week_mix, use_container_width=True)
+        else:
+            st.info("Need at least 2 weeks of data to show weekly trends.")
+        
+        with st.expander("Show weekly data"):
+            st.dataframe(wt, use_container_width=True)
     
-    if not pivot.empty:
-        heat_df = pivot.reset_index().melt(id_vars=["age"], var_name="month", value_name="value")
-        fig_heat = px.density_heatmap(
-            heat_df, x="month", y="age", z="value",
-            labels={"value":"Total ($)"},
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
+    else:  # Monthly trend views
+        st.subheader("Monthly Trends (Jan–Dec)")
+        monthly = monthly_rollup_end_of_month(hist)
+        mt = monthly_totals(monthly)
 
-    with st.expander("Show history data"):
-        st.dataframe(add_month_column(hist).sort_values(["snapshot_date","age"]), use_container_width=True)
+        # Total pipeline trend
+        fig_total = px.line(mt, x="month", y="totalValue", markers=True, labels={"totalValue":"Total Pipeline ($)"})
+        fig_total.update_traces(hovertemplate="<b>%{x}</b><br>Total: %{y:$,.0f}<extra></extra>")
+        fig_total.update_xaxes(hoverformat="%B %Y")
+        st.plotly_chart(fig_total, use_container_width=True)
+
+        # Mix trend (%)
+        pct_long = mt.melt(
+            id_vars=["month"],
+            value_vars=["activePct", "updatesPct", "holdPct"],
+            var_name="metric",
+            value_name="pct",
+        )
+        metric_labels = {"activePct":"Active %", "updatesPct":"Updates Needed %", "holdPct":"Hold %"}
+        pct_long["metric"] = pct_long["metric"].map(metric_labels)
+
+        fig_mix = px.line(pct_long, x="month", y="pct", color="metric", markers=True, labels={"pct":"Percent"})
+        fig_mix.update_traces(hovertemplate="<b>%{x}</b><br>%{legendgroup}: %{y:.2f}%<extra></extra>")
+        fig_mix.update_xaxes(hoverformat="%B %Y")
+        st.plotly_chart(fig_mix, use_container_width=True)
+
+        # Age bucket totals heatmap (optional but powerful)
+        monthly2 = monthly.copy()
+        monthly2["totalValueBucket"] = monthly2["active"] + monthly2["croUpdate"] + monthly2["directUpdate"] + monthly2["hold"]
+
+        pivot = monthly2.pivot_table(index="age", columns="month", values="totalValueBucket", aggfunc="sum").fillna(0)
+        
+        if not pivot.empty:
+            heat_df = pivot.reset_index().melt(id_vars=["age"], var_name="month", value_name="value")
+            fig_heat = px.density_heatmap(
+                heat_df, x="month", y="age", z="value",
+                labels={"value":"Total ($)"},
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
+
+        with st.expander("Show monthly data"):
+            st.dataframe(add_month_column(hist).sort_values(["snapshot_date","age"]), use_container_width=True)
 
 
 # ----------------------------
