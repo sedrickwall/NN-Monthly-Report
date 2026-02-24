@@ -86,6 +86,13 @@ def append_snapshot(hist: pd.DataFrame, snapshot_df: pd.DataFrame, snapshot_date
 
     return combined.sort_values(["snapshot_date", "age"])
 
+def latest_snapshot(hist: pd.DataFrame) -> pd.DataFrame:
+    """Get the most recent snapshot only."""
+    h = hist.copy()
+    h["snapshot_date"] = pd.to_datetime(h["snapshot_date"])
+    latest = h["snapshot_date"].max()
+    return h[h["snapshot_date"] == latest].copy()
+
 def add_month_column(hist: pd.DataFrame) -> pd.DataFrame:
     h = hist.copy()
     d = pd.to_datetime(h["snapshot_date"])
@@ -94,23 +101,25 @@ def add_month_column(hist: pd.DataFrame) -> pd.DataFrame:
 
 def monthly_rollup_end_of_month(hist: pd.DataFrame) -> pd.DataFrame:
     """Select the last weekly snapshot in each month (per age bucket)."""
-    h = add_month_column(hist)
-    h["snapshot_dt"] = pd.to_datetime(h["snapshot_date"])
+    h = hist.copy()
+    h["snapshot_date"] = pd.to_datetime(h["snapshot_date"])
+    h["month"] = h["snapshot_date"].dt.to_period("M").astype(str)
 
-    # last snapshot date per month
-    last_dt = h.groupby("month")["snapshot_dt"].max().reset_index()
-
-    # keep only rows for that month’s last snapshot date
-    h2 = h.merge(last_dt, on="month", suffixes=("", "_last"))
-    h2 = h2[h2["snapshot_dt"] == h2["snapshot_dt_last"]].drop(columns=["snapshot_dt_last"])
-
-    return h2.drop(columns=["snapshot_dt"])
+    # Get last snapshot date per month
+    last_dt = h.groupby("month")["snapshot_date"].max().reset_index()
+    
+    # Keep only rows for that month's last snapshot date
+    out = h.merge(last_dt, on=["month", "snapshot_date"], how="inner")
+    return out
 
 def monthly_totals(monthly_df: pd.DataFrame) -> pd.DataFrame:
-    """Monthly totals across all age buckets."""
+    """Monthly totals across all age buckets (using end-of-month snapshots)."""
     m = monthly_df.copy()
     m["totalValue"] = m["active"] + m["croUpdate"] + m["directUpdate"] + m["hold"]
-    out = m.groupby("month", as_index=False)[VALUE_COLS + ["totalValue"]].sum()
+    
+    out = m.groupby("month", as_index=False)[
+        ["active", "croUpdate", "directUpdate", "hold", "count", "totalValue"]
+    ].sum()
 
     out["updatesNeeded"] = out["croUpdate"] + out["directUpdate"]
     out["activePct"] = (out["active"] / out["totalValue"] * 100).round(2).fillna(0)
@@ -305,6 +314,13 @@ if st.sidebar.button("Sync History from Google Sheet"):
         st.sidebar.error(f"Failed to sync: {e}")
         st.sidebar.exception(e)
 
+st.sidebar.divider()
+view_mode = st.sidebar.radio(
+    "View",
+    ["Current pipeline", "Trend by month", "Trend by week"],
+    index=0
+)
+
 
 st.sidebar.title("Data")
 mode = st.sidebar.radio("Choose data source", ["Upload CSV/Excel", "Use sample data", "Google Sheet"], index=2)
@@ -364,10 +380,42 @@ AGE_ORDER = ["0-3 Mth", "3-6 Mth", "6-9 Mth", "9-12 Mth", "12+ Mth"]
 df["age"] = pd.Categorical(df["age"], categories=AGE_ORDER, ordered=True)
 df = df.sort_values("age")
 
-stats = compute_stats(df)
+# Prepare data for different views
+if view_mode == "Current pipeline":
+    if len(hist) > 0:
+        df_current = latest_snapshot(hist)
+        if not df_current.empty:
+            df_current["age"] = pd.Categorical(df_current["age"], categories=AGE_ORDER, ordered=True)
+            df_current = df_current.sort_values("age")
+            df_display = df_current.drop(columns=["snapshot_date"], errors="ignore")
+        else:
+            df_display = df
+    else:
+        df_display = df
+elif view_mode == "Trend by month":
+    if len(hist) > 0:
+        monthly_data = monthly_rollup_end_of_month(hist)
+        if not monthly_data.empty:
+            monthly_data["age"] = pd.Categorical(monthly_data["age"], categories=AGE_ORDER, ordered=True)
+            df_display = monthly_data.sort_values(["month", "age"])
+        else:
+            df_display = df
+    else:
+        df_display = df
+else:  # Trend by week
+    if len(hist) > 0:
+        hist_sorted = hist.copy()
+        hist_sorted["snapshot_date"] = pd.to_datetime(hist_sorted["snapshot_date"])
+        hist_sorted = hist_sorted.sort_values("snapshot_date", ascending=False)
+        hist_sorted["age"] = pd.Categorical(hist_sorted["age"], categories=AGE_ORDER, ordered=True)
+        df_display = hist_sorted.sort_values(["snapshot_date", "age"])
+    else:
+        df_display = df
+
+stats = compute_stats(df_display)
 
 st.title("Sales Pipeline Dashboard")
-st.caption("Executive Performance & Aging Analytics")
+st.caption(f"Executive Performance & Aging Analytics — {view_mode}")
 
 # ----------------------------
 # KPI Cards
@@ -389,7 +437,7 @@ with left:
     st.subheader("Pipeline Composition by Age")
 
     # Stacked bar needs "long" format
-    long_df = df.melt(
+    long_df = df_display.melt(
         id_vars=["age"],
         value_vars=["active", "croUpdate", "directUpdate", "hold"],
         var_name="bucket",
@@ -444,7 +492,7 @@ b1, b2 = st.columns([2, 1])
 with b1:
     st.subheader("Risk Cluster (Volume vs. Value)")
 
-    df_scatter = df.copy()
+    df_scatter = df_display.copy()
     df_scatter["totalValueBucket"] = df_scatter["active"] + df_scatter["croUpdate"] + df_scatter["directUpdate"] + df_scatter["hold"]
 
     fig_scatter = px.scatter(
@@ -462,9 +510,9 @@ with b1:
 with b2:
     st.subheader("Critical Action Items")
     # These mirror your React narrative, but computed from the data.
-    active_12plus = float(df.loc[df["age"] == "12+ Mth", "active"].sum())
-    updates_6_9 = float(df.loc[df["age"] == "6-9 Mth", ["croUpdate", "directUpdate"]].sum(axis=1).sum())
-    core_0_6 = float(df.loc[df["age"].isin(["0-3 Mth", "3-6 Mth"]), "active"].sum())
+    active_12plus = float(df_display.loc[df_display["age"] == "12+ Mth", "active"].sum())
+    updates_6_9 = float(df_display.loc[df_display["age"] == "6-9 Mth", ["croUpdate", "directUpdate"]].sum(axis=1).sum())
+    core_0_6 = float(df_display.loc[df_display["age"].isin(["0-3 Mth", "3-6 Mth"]), "active"].sum())
 
     st.error(f'Audit "Active" 12+ Month Deals — {format_currency(active_12plus)} marked Active')
     st.warning(f'Hygiene Sprint: 6–9 Month Bracket — {format_currency(updates_6_9)} in Updates Needed')
@@ -482,7 +530,8 @@ else:
 
     # Total pipeline trend
     fig_total = px.line(mt, x="month", y="totalValue", markers=True, labels={"totalValue":"Total Pipeline ($)"})
-    fig_total.update_traces(hovertemplate="%{x}<br>Total: %{y:$,.0f}<extra></extra>")
+    fig_total.update_traces(hovertemplate="<b>%{x}</b><br>Total: %{y:$,.0f}<extra></extra>")
+    fig_total.update_xaxes(hoverformat="%B %Y")
     st.plotly_chart(fig_total, use_container_width=True)
 
     # Mix trend (%)
@@ -496,7 +545,8 @@ else:
     pct_long["metric"] = pct_long["metric"].map(metric_labels)
 
     fig_mix = px.line(pct_long, x="month", y="pct", color="metric", markers=True, labels={"pct":"Percent"})
-    fig_mix.update_traces(hovertemplate="%{x}<br>%{legendgroup}: %{y:.2f}%<extra></extra>")
+    fig_mix.update_traces(hovertemplate="<b>%{x}</b><br>%{legendgroup}: %{y:.2f}%<extra></extra>")
+    fig_mix.update_xaxes(hoverformat="%B %Y")
     st.plotly_chart(fig_mix, use_container_width=True)
 
     # Age bucket totals heatmap (optional but powerful)
