@@ -420,6 +420,23 @@ df_display = df.copy()  # Default to current uploaded data
 show_charts = True  # Show main charts by default
 show_trends = True  # Show trends section
 
+# Auto-sync from Google Sheets if history is empty and user selected a trend view
+if view_mode in ["Trend by month", "Trend by week"] and len(hist) == 0:
+    try:
+        sheet_data = fetch_google_sheet_data()
+        if not sheet_data.empty:
+            st.info("📊 Auto-syncing history from Google Sheet for trend analysis...")
+            for _, row in sheet_data.iterrows():
+                hist = append_snapshot(hist, pd.DataFrame([row]), row["snapshot_date"])
+            save_history(hist)
+            # Normalize after loading
+            if not hist.empty:
+                hist["snapshot_date"] = pd.to_datetime(hist["snapshot_date"], errors="coerce")
+                hist = hist.dropna(subset=["snapshot_date"])
+                hist = hist.sort_values("snapshot_date")
+    except Exception as e:
+        st.warning(f"Could not auto-sync from Google Sheet: {e}")
+
 if view_mode == "Current pipeline":
     show_charts = True
     show_trends = False
@@ -632,7 +649,19 @@ if show_trends:
 
             # Also show ALL weeks (not just end-of-month)
             st.subheader("All Weeks Trend")
+            
+            # Debug: Check history before weekly_totals
+            with st.expander("📊 Debug: Raw History"):
+                st.write("History rows:", len(hist))
+                st.write("Unique dates in history:", hist["snapshot_date"].nunique() if "snapshot_date" in hist.columns else 0)
+                st.dataframe(hist.sort_values("snapshot_date").tail(20), use_container_width=True)
+            
             wt_all = weekly_totals(hist)
+            
+            with st.expander("📊 Debug: Weekly Totals"):
+                st.write("Weekly data rows:", len(wt_all))
+                st.write("Unique weeks:", wt_all["snapshot_date"].nunique() if len(wt_all) > 0 else 0)
+                st.dataframe(wt_all, use_container_width=True)
             
             if len(wt_all) > 1:
                 fig_all_total = px.line(
