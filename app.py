@@ -125,6 +125,9 @@ def monthly_totals(monthly_df: pd.DataFrame) -> pd.DataFrame:
     out["activePct"] = (out["active"] / out["totalValue"] * 100).round(2).fillna(0)
     out["updatesPct"] = (out["updatesNeeded"] / out["totalValue"] * 100).round(2).fillna(0)
     out["holdPct"] = (out["hold"] / out["totalValue"] * 100).round(2).fillna(0)
+    
+    # Sort by month to ensure chronological order
+    out = out.sort_values("month")
     return out
 
 def weekly_totals(hist: pd.DataFrame) -> pd.DataFrame:
@@ -413,76 +416,81 @@ df["age"] = pd.Categorical(df["age"], categories=AGE_ORDER, ordered=True)
 df = df.sort_values("age")
 
 # Prepare data for different views
+df_display = df.copy()  # Default to current uploaded data
+show_charts = True  # Show main charts by default
+show_trends = True  # Show trends section
+
 if view_mode == "Current pipeline":
+    show_charts = True
+    show_trends = False
     if len(hist) > 0:
         df_current = latest_snapshot(hist)
         if not df_current.empty:
             df_current["age"] = pd.Categorical(df_current["age"], categories=AGE_ORDER, ordered=True)
             df_current = df_current.sort_values("age")
             df_display = df_current.drop(columns=["snapshot_date"], errors="ignore")
-        else:
-            df_display = df
-    else:
-        df_display = df
 elif view_mode == "Trend by month":
-    if len(hist) > 0:
-        monthly_data = monthly_rollup_end_of_month(hist)
-        if not monthly_data.empty:
-            monthly_data["age"] = pd.Categorical(monthly_data["age"], categories=AGE_ORDER, ordered=True)
-            df_display = monthly_data.sort_values(["month", "age"])
-        else:
-            df_display = df
-    else:
-        df_display = df
-else:  # Trend by week
-    if len(hist) > 0:
-        hist_sorted = hist.copy()
-        hist_sorted["snapshot_date"] = pd.to_datetime(hist_sorted["snapshot_date"])
-        hist_sorted = hist_sorted.sort_values("snapshot_date", ascending=False)
-        hist_sorted["age"] = pd.Categorical(hist_sorted["age"], categories=AGE_ORDER, ordered=True)
-        df_display = hist_sorted.sort_values(["snapshot_date", "age"])
-    else:
-        df_display = df
+    show_charts = False
+    show_trends = True
+elif view_mode == "Trend by week":
+    show_charts = False
+    show_trends = True
 
 stats = compute_stats(df_display)
 
 st.title("Sales Pipeline Dashboard")
 st.caption(f"Executive Performance & Aging Analytics — {view_mode}")
 
-# ----------------------------
-# KPI Cards
-# ----------------------------
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Total Pipeline", format_currency(stats["totalValue"]))
-k2.metric("Active %", f"{stats['activePct']:.0f}%")
-k3.metric("Updates Needed", format_currency(stats["updatesNeededValue"]))
-k4.metric("Accounts (Total)", f"{stats['totalCount']:,}")
+# Show KPI cards only for "Current pipeline" view
+if view_mode == "Current pipeline":
+    # ----------------------------
+    # KPI Cards
+    # ----------------------------
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Total Pipeline", format_currency(stats["totalValue"]))
+    k2.metric("Active %", f"{stats['activePct']:.0f}%")
+    k3.metric("Updates Needed", format_currency(stats["updatesNeededValue"]))
+    k4.metric("Accounts (Total)", f"{stats['totalCount']:,}")
 
-st.divider()
+    st.divider()
+
+# ----------------------------
+# Main charts section (only for "Current pipeline" view)
+# ----------------------------
+if show_charts:
+    # KPI Cards
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Total Pipeline", format_currency(stats["totalValue"]))
+    k2.metric("Active %", f"{stats['activePct']:.0f}%")
+    k3.metric("Updates Needed", format_currency(stats["updatesNeededValue"]))
+    k4.metric("Accounts (Total)", f"{stats['totalCount']:,}")
+
+    st.divider()
 
 # ----------------------------
 # Main row: stacked bar + donut
 # ----------------------------
-left, right = st.columns([2, 1])
+if show_charts:
+    left, right = st.columns([2, 1])
 
-with left:
-    st.subheader("Pipeline Composition by Age")
+    with left:
+        st.subheader("Pipeline Composition by Age")
 
-    # Stacked bar needs "long" format
-    long_df = df_display.melt(
-        id_vars=["age"],
-        value_vars=["active", "croUpdate", "directUpdate", "hold"],
-        var_name="bucket",
-        value_name="value",
-    )
+        # Stacked bar needs "long" format
+        long_df = df_display.melt(
+            id_vars=["age"],
+            value_vars=["active", "croUpdate", "directUpdate", "hold"],
+            var_name="bucket",
+            value_name="value",
+        )
 
-    bucket_labels = {
-        "active": "Active",
-        "croUpdate": "CRO Update",
-        "directUpdate": "Direct Update",
-        "hold": "On Hold",
-    }
-    long_df["bucket"] = long_df["bucket"].map(bucket_labels)
+        bucket_labels = {
+            "active": "Active",
+            "croUpdate": "CRO Update",
+            "directUpdate": "Direct Update",
+            "hold": "On Hold",
+        }
+        long_df["bucket"] = long_df["bucket"].map(bucket_labels)
 
     fig_bar = px.bar(
         long_df,
@@ -514,15 +522,16 @@ with right:
     fig_pie.update_traces(hovertemplate="%{label}: %{value:$,.0f}<extra></extra>")
     st.plotly_chart(fig_pie, use_container_width=True)
 
-st.divider()
+if show_charts:
+    st.divider()
 
-# ----------------------------
-# Bottom row: bubble scatter + action items
-# ----------------------------
-b1, b2 = st.columns([2, 1])
+    # ----------------------------
+    # Bottom row: bubble scatter + action items
+    # ----------------------------
+    b1, b2 = st.columns([2, 1])
 
-with b1:
-    st.subheader("Risk Cluster (Volume vs. Value)")
+    with b1:
+        st.subheader("Risk Cluster (Volume vs. Value)")
 
     df_scatter = df_display.copy()
     df_scatter["totalValueBucket"] = df_scatter["active"] + df_scatter["croUpdate"] + df_scatter["directUpdate"] + df_scatter["hold"]
@@ -550,98 +559,209 @@ with b2:
     st.warning(f'Hygiene Sprint: 6–9 Month Bracket — {format_currency(updates_6_9)} in Updates Needed')
     st.success(f"Velocity Opportunity: 0–6 Month Core — {format_currency(core_0_6)} Active")
 
-st.divider()
+if show_charts:
+    st.divider()
 
-st.header("Trends")
+# ----------------------------
+# Trends section
+# ----------------------------
+if show_trends:
+    st.header("Trends")
 
-if len(hist) == 0:
-    st.info("No history yet. Upload a week and click 'Append this snapshot to history'.")
-else:
-    # Show trends based on view mode
-    if view_mode == "Trend by week":
-        st.subheader("Weekly Trends")
-        wt = weekly_totals(hist)
+    if len(hist) == 0:
+        st.info("No history yet. Upload a week and click 'Append this snapshot to history'.")
+    else:
+        # Show trends based on view mode
+        if view_mode == "Trend by week":
+            st.subheader("Weekly Trends")
+            wt = weekly_totals(hist)
+            
+            if len(wt) > 1:
+                # Total pipeline trend by week
+                fig_week_total = px.line(
+                    wt,
+                    x="snapshot_date",
+                    y="totalValue",
+                    markers=True,
+                    labels={"totalValue": "Total Pipeline ($)", "snapshot_date": "Week"}
+                )
+                fig_week_total.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:$,.0f}<extra></extra>")
+                st.plotly_chart(fig_week_total, use_container_width=True)
+
+                # Weekly mix
+                mix = wt.melt(
+                    id_vars=["snapshot_date"],
+                    value_vars=["active", "updatesNeeded", "hold"],
+                    var_name="metric",
+                    value_name="value"
+                )
+                label_map = {"active": "Active", "updatesNeeded": "Updates Needed", "hold": "Hold"}
+                mix["metric"] = mix["metric"].map(label_map)
+
+                fig_week_mix = px.line(
+                    mix,
+                    x="snapshot_date",
+                    y="value",
+                    color="metric",
+                    markers=True,
+                    labels={"value": "Value ($)", "snapshot_date": "Week", "metric": ""}
+                )
+                fig_week_mix.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
+                st.plotly_chart(fig_week_mix, use_container_width=True)
+            else:
+                st.info("Need at least 2 weeks of data to show weekly trends.")
+            
+            with st.expander("Show weekly data"):
+                st.dataframe(wt, use_container_width=True)
         
-        if len(wt) > 1:
-            # Total pipeline trend by week
-            fig_week_total = px.line(
-                wt,
-                x="snapshot_date",
-                y="totalValue",
+        else:  # Monthly trend views
+            st.subheader("Monthly Trends (Jan–Dec)")
+            monthly = monthly_rollup_end_of_month(hist)
+            
+            # Debug: Show what we have
+            with st.expander("📊 Debug: Monthly Data"):
+                st.write("Months found:", monthly["month"].unique() if "month" in monthly.columns else "No month column")
+                st.write("Rows in monthly data:", len(monthly))
+                st.dataframe(monthly.sort_values("month"), use_container_width=True)
+            
+            mt = monthly_totals(monthly)
+            
+            with st.expander("📊 Debug: Monthly Totals"):
+                st.write("Months in totals:", mt["month"].unique())
+                st.write("Rows in totals:", len(mt))
+                st.dataframe(mt, use_container_width=True)
+
+            # Also show ALL weeks (not just end-of-month)
+            st.subheader("All Weeks Trend")
+            wt_all = weekly_totals(hist)
+            
+            if len(wt_all) > 1:
+                fig_all_total = px.line(
+                    wt_all,
+                    x="snapshot_date",
+                    y="totalValue",
+                    markers=True,
+                    labels={"totalValue": "Total Pipeline ($)", "snapshot_date": "Week Ending"}
+                )
+                fig_all_total.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:$,.0f}<extra></extra>")
+                st.plotly_chart(fig_all_total, use_container_width=True)
+
+                # All weeks mix (absolute)
+                mix_all = wt_all.melt(
+                    id_vars=["snapshot_date"],
+                    value_vars=["active", "croUpdate", "directUpdate", "hold"],
+                    var_name="status",
+                    value_name="value"
+                )
+                status_labels_all = {
+                    "active": "Active",
+                    "croUpdate": "CRO Update",
+                    "directUpdate": "Direct Update",
+                    "hold": "On Hold"
+                }
+                mix_all["status"] = mix_all["status"].map(status_labels_all)
+
+                fig_all_mix = px.line(
+                    mix_all,
+                    x="snapshot_date",
+                    y="value",
+                    color="status",
+                    markers=True,
+                    labels={"value": "Value ($)", "snapshot_date": "Week Ending", "status": "Status"}
+                )
+                fig_all_mix.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
+                st.plotly_chart(fig_all_mix, use_container_width=True)
+
+                with st.expander("Show all weeks data"):
+                    st.dataframe(wt_all, use_container_width=True)
+            
+            st.divider()
+
+            # Total pipeline trend (end-of-month only)
+            fig_total = px.line(mt, x="month", y="totalValue", markers=True, labels={"totalValue":"Total Pipeline ($) - End of Month"})
+            fig_total.update_traces(hovertemplate="<b>%{x}</b><br>Total: %{y:$,.0f}<extra></extra>")
+            st.plotly_chart(fig_total, use_container_width=True)
+            
+            # Mix trend - Absolute values
+            st.subheader("Pipeline Mix by Status (Absolute Values)")
+            mix_abs = mt.melt(
+                id_vars=["month"],
+                value_vars=["active", "croUpdate", "directUpdate", "hold"],
+                var_name="status",
+                value_name="value",
+            )
+            status_labels = {
+                "active": "Active",
+                "croUpdate": "CRO Update",
+                "directUpdate": "Direct Update",
+                "hold": "On Hold"
+            }
+            mix_abs["status"] = mix_abs["status"].map(status_labels)
+
+            fig_mix_abs = px.line(
+                mix_abs,
+                x="month",
+                y="value",
+                color="status",
                 markers=True,
-                labels={"totalValue": "Total Pipeline ($)", "snapshot_date": "Week"}
+                labels={"value": "Value ($)", "month": "Month", "status": "Status"}
             )
-            fig_week_total.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:$,.0f}<extra></extra>")
-            st.plotly_chart(fig_week_total, use_container_width=True)
+            fig_mix_abs.update_traces(hovertemplate="<b>%{x}</b><br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
+            st.plotly_chart(fig_mix_abs, use_container_width=True)
 
-            # Weekly mix
-            mix = wt.melt(
-                id_vars=["snapshot_date"],
-                value_vars=["active", "updatesNeeded", "hold"],
+            # Active & Updates Needed Trend (easier to see individual changes)
+            st.subheader("Active & Updates Needed Trend")
+            active_updates = mt.melt(
+                id_vars=["month"],
+                value_vars=["active", "updatesNeeded"],
                 var_name="metric",
-                value_name="value"
+                value_name="value",
             )
-            label_map = {"active": "Active", "updatesNeeded": "Updates Needed", "hold": "Hold"}
-            mix["metric"] = mix["metric"].map(label_map)
+            metric_labels_au = {"active": "Active", "updatesNeeded": "Updates Needed"}
+            active_updates["metric"] = active_updates["metric"].map(metric_labels_au)
 
-            fig_week_mix = px.line(
-                mix,
-                x="snapshot_date",
+            fig_au = px.line(
+                active_updates,
+                x="month",
                 y="value",
                 color="metric",
                 markers=True,
-                labels={"value": "Value ($)", "snapshot_date": "Week", "metric": ""}
+                labels={"value": "Value ($)", "month": "Month", "metric": ""}
             )
-            fig_week_mix.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
-            st.plotly_chart(fig_week_mix, use_container_width=True)
-        else:
-            st.info("Need at least 2 weeks of data to show weekly trends.")
-        
-        with st.expander("Show weekly data"):
-            st.dataframe(wt, use_container_width=True)
-    
-    else:  # Monthly trend views
-        st.subheader("Monthly Trends (Jan–Dec)")
-        monthly = monthly_rollup_end_of_month(hist)
-        mt = monthly_totals(monthly)
+            fig_au.update_traces(hovertemplate="<b>%{x}</b><br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
+            st.plotly_chart(fig_au, use_container_width=True)
 
-        # Total pipeline trend
-        fig_total = px.line(mt, x="month", y="totalValue", markers=True, labels={"totalValue":"Total Pipeline ($)"})
-        fig_total.update_traces(hovertemplate="<b>%{x}</b><br>Total: %{y:$,.0f}<extra></extra>")
-        fig_total.update_xaxes(hoverformat="%B %Y")
-        st.plotly_chart(fig_total, use_container_width=True)
-
-        # Mix trend (%)
-        pct_long = mt.melt(
-            id_vars=["month"],
-            value_vars=["activePct", "updatesPct", "holdPct"],
-            var_name="metric",
-            value_name="pct",
-        )
-        metric_labels = {"activePct":"Active %", "updatesPct":"Updates Needed %", "holdPct":"Hold %"}
-        pct_long["metric"] = pct_long["metric"].map(metric_labels)
-
-        fig_mix = px.line(pct_long, x="month", y="pct", color="metric", markers=True, labels={"pct":"Percent"})
-        fig_mix.update_traces(hovertemplate="<b>%{x}</b><br>%{legendgroup}: %{y:.2f}%<extra></extra>")
-        fig_mix.update_xaxes(hoverformat="%B %Y")
-        st.plotly_chart(fig_mix, use_container_width=True)
-
-        # Age bucket totals heatmap (optional but powerful)
-        monthly2 = monthly.copy()
-        monthly2["totalValueBucket"] = monthly2["active"] + monthly2["croUpdate"] + monthly2["directUpdate"] + monthly2["hold"]
-
-        pivot = monthly2.pivot_table(index="age", columns="month", values="totalValueBucket", aggfunc="sum").fillna(0)
-        
-        if not pivot.empty:
-            heat_df = pivot.reset_index().melt(id_vars=["age"], var_name="month", value_name="value")
-            fig_heat = px.density_heatmap(
-                heat_df, x="month", y="age", z="value",
-                labels={"value":"Total ($)"},
+            # Mix trend (%)
+            st.subheader("Pipeline Mix by Status (%)")
+            pct_long = mt.melt(
+                id_vars=["month"],
+                value_vars=["activePct", "updatesPct", "holdPct"],
+                var_name="metric",
+                value_name="pct",
             )
-            st.plotly_chart(fig_heat, use_container_width=True)
+            metric_labels = {"activePct":"Active %", "updatesPct":"Updates Needed %", "holdPct":"Hold %"}
+            pct_long["metric"] = pct_long["metric"].map(metric_labels)
 
-        with st.expander("Show monthly data"):
-            st.dataframe(add_month_column(hist).sort_values(["snapshot_date","age"]), use_container_width=True)
+            fig_mix = px.line(pct_long, x="month", y="pct", color="metric", markers=True, labels={"pct":"Percent"})
+            fig_mix.update_traces(hovertemplate="<b>%{x}</b><br>%{legendgroup}: %{y:.2f}%<extra></extra>")
+            st.plotly_chart(fig_mix, use_container_width=True)
+
+            # Age bucket totals heatmap (optional but powerful)
+            monthly2 = monthly.copy()
+            monthly2["totalValueBucket"] = monthly2["active"] + monthly2["croUpdate"] + monthly2["directUpdate"] + monthly2["hold"]
+
+            pivot = monthly2.pivot_table(index="age", columns="month", values="totalValueBucket", aggfunc="sum").fillna(0)
+            
+            if not pivot.empty:
+                heat_df = pivot.reset_index().melt(id_vars=["age"], var_name="month", value_name="value")
+                fig_heat = px.density_heatmap(
+                    heat_df, x="month", y="age", z="value",
+                    labels={"value":"Total ($)"},
+                )
+                st.plotly_chart(fig_heat, use_container_width=True)
+
+            with st.expander("Show monthly data"):
+                st.dataframe(add_month_column(hist).sort_values(["snapshot_date","age"]), use_container_width=True)
 
 
 # ----------------------------
