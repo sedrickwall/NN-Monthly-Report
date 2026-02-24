@@ -1,8 +1,57 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import gspread
+from google.oauth2.service_account import Credentials
+
+SHEET_ID = st.secrets["SHEET_ID"]
+TAB_NAME = "weekly_age_bucket_snapshots"
+
+KEY_COLS = ["snapshot_date", "age"]
+VALUE_COLS = ["active", "croUpdate", "directUpdate", "hold", "count"]
+EXPECTED_HEADER = KEY_COLS + VALUE_COLS
 
 st.set_page_config(page_title="Sales Pipeline Dashboard", layout="wide")
+
+WIDE_REQUIRED = [
+    "age",
+    "active_count","active_amount",
+    "cro_count","cro_amount",
+    "direct_count","direct_amount",
+    "hold_count","hold_amount",
+]
+
+def validate_and_convert_wide(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [c.strip() for c in df.columns]
+
+    missing = [c for c in WIDE_REQUIRED if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    num_cols = [c for c in WIDE_REQUIRED if c != "age"]
+    for c in num_cols:
+        # Handles numbers that come in as text
+        df[c] = (
+            df[c].astype(str)
+            .str.replace("$", "", regex=False)
+            .str.replace(",", "", regex=False)
+        )
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    out = pd.DataFrame()
+    out["age"] = df["age"].astype(str)
+
+    out["active"] = df["active_amount"]
+    out["croUpdate"] = df["cro_amount"]
+    out["directUpdate"] = df["direct_amount"]
+    out["hold"] = df["hold_amount"]
+
+    out["count"] = (
+        df["active_count"] + df["cro_count"] + df["direct_count"] + df["hold_count"]
+    ).astype(int)
+
+    return out
 
 from pathlib import Path
 
@@ -11,7 +60,6 @@ DATA_DIR.mkdir(exist_ok=True)
 HISTORY_PATH = DATA_DIR / "weekly_age_bucket_snapshots.parquet"
 
 HISTORY_KEYS = ["snapshot_date", "age"]
-VALUE_COLS = ["active", "croUpdate", "directUpdate", "hold", "count"]
 
 def load_history() -> pd.DataFrame:
     if HISTORY_PATH.exists():
@@ -74,6 +122,40 @@ def monthly_totals(monthly_df: pd.DataFrame) -> pd.DataFrame:
 # ----------------------------
 # Helpers
 # ----------------------------
+@st.cache_resource
+def get_gsheet_client():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=scopes
+    )
+    return gspread.authorize(creds)
+
+def get_or_create_worksheet():
+    gc = get_gsheet_client()
+    sh = gc.open_by_key(SHEET_ID)
+
+    try:
+        ws = sh.worksheet(TAB_NAME)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=TAB_NAME, rows=2000, cols=20)
+
+    return ws
+
+def ensure_header(ws):
+    header = ws.row_values(1)
+    if not header:
+        ws.update(values=[EXPECTED_HEADER], range_name="A1")
+        return "Header created"
+
+    # Strip whitespace for comparison
+    header_stripped = [c.strip() for c in header]
+    if header_stripped != EXPECTED_HEADER:
+        return f"Header mismatch. Found: {header}"
+
+    return "Header OK"
+
+
 def format_currency(val: float) -> str:
     # Compact-ish formatting (K/M/B) without relying on locale quirks
     abs_val = abs(val)
@@ -120,7 +202,11 @@ def compute_stats(df: pd.DataFrame) -> dict:
     updates_needed = float((df["croUpdate"] + df["directUpdate"]).sum())
 
     # Basic % metrics
-    active_pct = (active_value / total_value * 100) if total_value > 0 else 0.0
+    if total_value > 0:
+        active_pct = active_value / total_value * 100
+    else:
+        st.warning("Total pipeline value is zero. Check your data.")
+        active_pct = 0.0
 
     # "stalePct" and "hrecExceeded" were hardcoded in React.
     # If you want these computed, you’ll need fields like "hrec_exceeded_flag" or "last_contact_date".
@@ -136,6 +222,30 @@ def compute_stats(df: pd.DataFrame) -> dict:
 # ----------------------------
 # Sidebar: Data input
 # ----------------------------
+
+st.sidebar.divider()
+st.sidebar.subheader("Google Sheets")
+
+if st.sidebar.button("Test Connection"):
+    try:
+        ws = get_or_create_worksheet()
+        header_status = ensure_header(ws)
+
+        # Read a tiny range to confirm read access
+        sample = ws.get("A1:G2")
+
+        st.sidebar.success("Connected to Google Sheets successfully")
+        st.sidebar.write(f"Worksheet: {ws.title}")
+        st.sidebar.write(header_status)
+        st.sidebar.write("Sample read:")
+        st.sidebar.json(sample)
+
+    except KeyError as e:
+        st.sidebar.error(f"Missing Streamlit secret: {e}")
+    except Exception as e:
+        st.sidebar.error("Connection failed")
+        st.sidebar.exception(e)
+
 
 st.sidebar.title("Data")
 mode = st.sidebar.radio("Choose data source", ["Upload CSV/Excel", "Use sample data"], index=0)

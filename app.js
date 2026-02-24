@@ -47,10 +47,13 @@ const App = () => {
     stalePct: 44
   };
 
+  const totalUpdatesNeeded = pipelineData.reduce((sum, d) => sum + d.croUpdate + d.directUpdate, 0);
+  const totalHold = pipelineData.reduce((sum, d) => sum + d.hold, 0);
+
   const pieData = [
     { name: 'Active', value: stats.activeValue, color: COLORS.active },
-    { name: 'Updates Needed', value: 54497088 + 78658211, color: COLORS.cro },
-    { name: 'On Hold/Other', value: 85401106, color: COLORS.hold },
+    { name: 'Updates Needed', value: totalUpdatesNeeded, color: COLORS.cro },
+    { name: 'On Hold/Other', value: totalHold, color: COLORS.hold },
   ];
 
   const bubbleData = pipelineData.map(d => ({
@@ -241,7 +244,7 @@ const App = () => {
           <div className="space-y-4">
             <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg">
               <p className="text-sm font-bold text-red-800">Audit "Active" 12+ Month Deals</p>
-              <p className="text-xs text-red-700 mt-1">$90.3M is currently marked active despite being {'>'}1 year old. High risk of pipeline inflation.</p>
+              <p className="text-xs text-red-700 mt-1">$90.3M is currently marked active despite being over 1 year old. High risk of pipeline inflation.</p>
             </div>
             <div className="p-4 bg-amber-50 border-l-4 border-amber-500 rounded-r-lg">
               <p className="text-sm font-bold text-amber-800">Hygiene Sprint: 6-9 Month Bracket</p>
