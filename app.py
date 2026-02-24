@@ -3,6 +3,9 @@ import streamlit as st
 import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime
+from fpdf import FPDF
+import io
 
 SHEET_ID = st.secrets["SHEET_ID"]
 TAB_NAME = "weekly_age_bucket_snapshots"
@@ -50,6 +53,10 @@ def validate_and_convert_wide(df: pd.DataFrame) -> pd.DataFrame:
     out["count"] = (
         df["active_count"] + df["cro_count"] + df["direct_count"] + df["hold_count"]
     ).astype(int)
+    
+    # Preserve snapshot_date if it exists
+    if "snapshot_date" in df.columns:
+        out["snapshot_date"] = df["snapshot_date"]
 
     return out
 
@@ -215,15 +222,73 @@ def fetch_google_sheet_data() -> pd.DataFrame:
         
         # Extract snapshot_date from the sheet if available, otherwise use today
         if "snapshot_date" in df.columns:
-            df["snapshot_date"] = pd.to_datetime(df["snapshot_date"]).dt.date
+            df["snapshot_date"] = pd.to_datetime(df["snapshot_date"], errors="coerce").dt.date
         else:
+            st.warning("No snapshot_date column found. Using today's date for all rows.")
             df["snapshot_date"] = pd.Timestamp.today().date()
         
+        # Ensure all required columns exist
+        for col in HISTORY_KEYS + VALUE_COLS:
+            if col not in df.columns:
+                st.warning(f"Missing column: {col}")
+                return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
         return df[HISTORY_KEYS + VALUE_COLS]
     
     except Exception as e:
         st.error(f"Failed to fetch Google Sheet data: {e}")
         return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
+
+
+def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -> bytes:
+    """Generate a PDF report of the current dashboard view."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.cell(0, 10, "Sales Pipeline Dashboard Report", ln=True, align="C")
+    
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 5, f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", ln=True, align="C")
+    pdf.cell(0, 5, f"View: {view_mode}", ln=True, align="C")
+    pdf.ln(5)
+    
+    # KPI Summary
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 8, "Key Metrics", ln=True)
+    
+    pdf.set_font("Helvetica", "", 10)
+    metrics = [
+        f"Total Pipeline: {format_currency(stats.get('totalValue', 0))}",
+        f"Active: {format_currency(stats.get('activeValue', 0))} ({stats.get('activePct', 0):.1f}%)",
+        f"Updates Needed: {format_currency(stats.get('updatesNeededValue', 0))}",
+        f"On Hold: {format_currency(stats.get('holdValue', 0))}",
+        f"Total Accounts: {stats.get('totalCount', 0):,}",
+    ]
+    
+    for metric in metrics:
+        pdf.cell(0, 6, f"• {metric}", ln=True)
+    
+    pdf.ln(5)
+    
+    # Age Bucket Summary
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 8, "Pipeline by Age Bucket", ln=True)
+    
+    pdf.set_font("Helvetica", "", 9)
+    try:
+        age_summary = df_display.groupby("age")[["active", "croUpdate", "directUpdate", "hold"]].sum()
+        for age in age_summary.index:
+            row = age_summary.loc[age]
+            total = row.sum()
+            pdf.cell(0, 5, f"{age}: ${total:,.0f} (Active: ${row['active']:,.0f})", ln=True)
+    except:
+        pdf.cell(0, 5, "Age bucket data unavailable", ln=True)
+    
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.cell(0, 4, "For detailed charts and analysis, view the interactive dashboard at:", ln=True)
+    pdf.cell(0, 4, "https://[your-streamlit-app-url]", ln=True)
+    
+    return pdf.output()
 
 
 def format_currency(val: float) -> str:
@@ -425,7 +490,12 @@ if view_mode in ["Trend by month", "Trend by week"] and len(hist) == 0:
     try:
         sheet_data = fetch_google_sheet_data()
         if not sheet_data.empty:
-            st.info("📊 Auto-syncing history from Google Sheet for trend analysis...")
+            st.info(f"📊 Auto-syncing {len(sheet_data)} rows from Google Sheet ({sheet_data['snapshot_date'].nunique()} unique dates)...")
+            
+            # Show what we're loading
+            with st.expander("📋 Rows being synced from Google Sheet"):
+                st.dataframe(sheet_data.sort_values("snapshot_date"), use_container_width=True)
+            
             for _, row in sheet_data.iterrows():
                 hist = append_snapshot(hist, pd.DataFrame([row]), row["snapshot_date"])
             save_history(hist)
@@ -456,7 +526,22 @@ elif view_mode == "Trend by week":
 stats = compute_stats(df_display)
 
 st.title("Sales Pipeline Dashboard")
-st.caption(f"Executive Performance & Aging Analytics — {view_mode}")
+
+# Add PDF download button in the title area
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.caption(f"Executive Performance & Aging Analytics — {view_mode}")
+with col2:
+    try:
+        pdf_bytes = generate_pdf_report(stats, view_mode, df_display)
+        st.download_button(
+            label="📥 Download PDF",
+            data=pdf_bytes,
+            file_name=f"Sales_Pipeline_Report_{datetime.now().strftime('%Y-%m-%d')}.pdf",
+            mime="application/pdf"
+        )
+    except Exception as e:
+        st.warning(f"PDF download unavailable: {e}")
 
 # Show KPI cards only for "Current pipeline" view
 if view_mode == "Current pipeline":

@@ -4,3 +4,5 @@ plotly
 openpyxl
 gspread
 google-auth-oauthlib
+fpdf2
+kaleido
