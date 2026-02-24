@@ -319,7 +319,8 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -
     pdf.cell(0, 4, "For detailed charts and analysis, view the interactive dashboard at:", ln=True)
     pdf.cell(0, 4, "https://[your-streamlit-app-url]", ln=True)
     
-    return pdf.output()
+    # Convert to bytes explicitly
+    return bytes(pdf.output())
 
 
 def format_currency(val: float) -> str:
@@ -501,6 +502,20 @@ st.dataframe(
     hist.sort_values("snapshot_date").tail(10),
     use_container_width=True
 )
+
+# DEBUG: Peek at raw Google Sheet data
+with st.expander("🔍 DEBUG: Raw Google Sheet Data"):
+    try:
+        raw_sheet = fetch_google_sheet_data()
+        st.write(f"Rows from sheet: {len(raw_sheet)}")
+        if len(raw_sheet) > 0:
+            st.write(f"Columns: {raw_sheet.columns.tolist()}")
+            st.write(f"Unique snapshot_date values in sheet: {raw_sheet['snapshot_date'].nunique() if 'snapshot_date' in raw_sheet.columns else 'N/A'}")
+            st.dataframe(raw_sheet.sort_values("snapshot_date"), use_container_width=True)
+        else:
+            st.write("Sheet returned empty")
+    except Exception as e:
+        st.error(f"Could not fetch sheet: {e}")
 
 if st.sidebar.button("Append this snapshot to history"):
     # IMPORTANT: df must be validated and in canonical age order
