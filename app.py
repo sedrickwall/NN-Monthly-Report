@@ -155,6 +155,49 @@ def ensure_header(ws):
 
     return "Header OK"
 
+def fetch_google_sheet_data() -> pd.DataFrame:
+    """Fetch and convert data from Google Sheet 'weekly_age_bucket_snapshots'."""
+    try:
+        ws = get_or_create_worksheet()
+        
+        # Get all values (skip header row)
+        all_values = ws.get_all_values()
+        
+        if len(all_values) <= 1:
+            return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
+        
+        # Convert to DataFrame
+        header = [c.strip() for c in all_values[0]]
+        data = all_values[1:]
+        
+        if not data:
+            return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
+        
+        df = pd.DataFrame(data, columns=header)
+        
+        # Check if this is wide format (has active_count, etc.)
+        if "active_count" in df.columns:
+            # Convert from wide format
+            df = validate_and_convert_wide(df)
+        elif "active" in df.columns:
+            # Already in narrow format, validate it
+            df = validate_df(df)
+        else:
+            st.error(f"Unrecognized sheet format. Expected wide or narrow columns. Found: {df.columns.tolist()}")
+            return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
+        
+        # Extract snapshot_date from the sheet if available, otherwise use today
+        if "snapshot_date" in df.columns:
+            df["snapshot_date"] = pd.to_datetime(df["snapshot_date"]).dt.date
+        else:
+            df["snapshot_date"] = pd.Timestamp.today().date()
+        
+        return df[HISTORY_KEYS + VALUE_COLS]
+    
+    except Exception as e:
+        st.error(f"Failed to fetch Google Sheet data: {e}")
+        return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
+
 
 def format_currency(val: float) -> str:
     # Compact-ish formatting (K/M/B) without relying on locale quirks
@@ -246,9 +289,25 @@ if st.sidebar.button("Test Connection"):
         st.sidebar.error("Connection failed")
         st.sidebar.exception(e)
 
+if st.sidebar.button("Sync History from Google Sheet"):
+    try:
+        sheet_data = fetch_google_sheet_data()
+        if not sheet_data.empty:
+            hist = load_history()
+            # Append all rows from the sheet to history
+            for _, row in sheet_data.iterrows():
+                hist = append_snapshot(hist, pd.DataFrame([row]), row["snapshot_date"])
+            save_history(hist)
+            st.sidebar.success(f"✓ Synced {len(sheet_data)} snapshots from Google Sheet. Total history rows: {len(hist):,}")
+        else:
+            st.sidebar.warning("No data found in Google Sheet or sheet is empty.")
+    except Exception as e:
+        st.sidebar.error(f"Failed to sync: {e}")
+        st.sidebar.exception(e)
+
 
 st.sidebar.title("Data")
-mode = st.sidebar.radio("Choose data source", ["Upload CSV/Excel", "Use sample data"], index=0)
+mode = st.sidebar.radio("Choose data source", ["Upload CSV/Excel", "Use sample data", "Google Sheet"], index=2)
 
 if mode == "Upload CSV/Excel":
     uploaded = st.sidebar.file_uploader("Upload file", type=["csv", "xlsx"])
@@ -265,6 +324,19 @@ if mode == "Upload CSV/Excel":
         except Exception as e:
             st.error(str(e))
             st.stop()
+elif mode == "Google Sheet":
+    try:
+        df = fetch_google_sheet_data()
+        if df.empty:
+            st.warning("No current snapshot data in Google Sheet. Using sample data.")
+            df = load_sample_data()
+        else:
+            # Group by age and get the latest snapshot
+            latest_date = df["snapshot_date"].max()
+            df = df[df["snapshot_date"] == latest_date].drop(columns=["snapshot_date"])
+    except Exception as e:
+        st.error(f"Failed to load from Google Sheet: {e}")
+        df = load_sample_data()
 else:
     df = load_sample_data()
 
