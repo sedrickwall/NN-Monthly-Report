@@ -492,35 +492,35 @@ if show_charts:
         }
         long_df["bucket"] = long_df["bucket"].map(bucket_labels)
 
-    fig_bar = px.bar(
-        long_df,
-        x="age",
-        y="value",
-        color="bucket",
-        barmode="stack",
-        labels={"age": "Age Bucket", "value": "Value ($)", "bucket": ""},
-    )
-    fig_bar.update_yaxes(showticklabels=False)
-    fig_bar.update_traces(hovertemplate="%{x}<br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
-    st.plotly_chart(fig_bar, use_container_width=True)
+        fig_bar = px.bar(
+            long_df,
+            x="age",
+            y="value",
+            color="bucket",
+            barmode="stack",
+            labels={"age": "Age Bucket", "value": "Value ($)", "bucket": ""},
+        )
+        fig_bar.update_yaxes(showticklabels=False)
+        fig_bar.update_traces(hovertemplate="%{x}<br>%{legendgroup}: %{y:$,.0f}<extra></extra>")
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-with right:
-    st.subheader("Pipeline Health Mix")
+    with right:
+        st.subheader("Pipeline Health Mix")
 
-    pie_df = pd.DataFrame([
-        {"name": "Active", "value": stats["activeValue"]},
-        {"name": "Updates Needed", "value": stats["updatesNeededValue"]},
-        {"name": "On Hold/Other", "value": stats["holdValue"]},
-    ])
+        pie_df = pd.DataFrame([
+            {"name": "Active", "value": stats["activeValue"]},
+            {"name": "Updates Needed", "value": stats["updatesNeededValue"]},
+            {"name": "On Hold/Other", "value": stats["holdValue"]},
+        ])
 
-    fig_pie = px.pie(
-        pie_df,
-        names="name",
-        values="value",
-        hole=0.55,
-    )
-    fig_pie.update_traces(hovertemplate="%{label}: %{value:$,.0f}<extra></extra>")
-    st.plotly_chart(fig_pie, use_container_width=True)
+        fig_pie = px.pie(
+            pie_df,
+            names="name",
+            values="value",
+            hole=0.55,
+        )
+        fig_pie.update_traces(hovertemplate="%{label}: %{value:$,.0f}<extra></extra>")
+        st.plotly_chart(fig_pie, use_container_width=True)
 
 if show_charts:
     st.divider()
@@ -533,33 +533,32 @@ if show_charts:
     with b1:
         st.subheader("Risk Cluster (Volume vs. Value)")
 
-    df_scatter = df_display.copy()
-    df_scatter["totalValueBucket"] = df_scatter["active"] + df_scatter["croUpdate"] + df_scatter["directUpdate"] + df_scatter["hold"]
+        df_scatter = df_display.copy()
+        df_scatter["totalValueBucket"] = df_scatter["active"] + df_scatter["croUpdate"] + df_scatter["directUpdate"] + df_scatter["hold"]
 
-    fig_scatter = px.scatter(
-        df_scatter,
-        x="age",
-        y="totalValueBucket",
-        size="count",
-        hover_name="age",
-        labels={"age": "Age Bucket", "totalValueBucket": "Total Value ($)", "count": "Account Count"},
-        size_max=60,
-    )
-    fig_scatter.update_traces(hovertemplate="%{x}<br>Total: %{y:$,.0f}<br>Count: %{marker.size}<extra></extra>")
-    st.plotly_chart(fig_scatter, use_container_width=True)
+        fig_scatter = px.scatter(
+            df_scatter,
+            x="age",
+            y="totalValueBucket",
+            size="count",
+            hover_name="age",
+            labels={"age": "Age Bucket", "totalValueBucket": "Total Value ($)", "count": "Account Count"},
+            size_max=60,
+        )
+        fig_scatter.update_traces(hovertemplate="%{x}<br>Total: %{y:$,.0f}<br>Count: %{marker.size}<extra></extra>")
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
-with b2:
-    st.subheader("Critical Action Items")
-    # These mirror your React narrative, but computed from the data.
-    active_12plus = float(df_display.loc[df_display["age"] == "12+ Mth", "active"].sum())
-    updates_6_9 = float(df_display.loc[df_display["age"] == "6-9 Mth", ["croUpdate", "directUpdate"]].sum(axis=1).sum())
-    core_0_6 = float(df_display.loc[df_display["age"].isin(["0-3 Mth", "3-6 Mth"]), "active"].sum())
+    with b2:
+        st.subheader("Critical Action Items")
+        # These mirror your React narrative, but computed from the data.
+        active_12plus = float(df_display.loc[df_display["age"] == "12+ Mth", "active"].sum())
+        updates_6_9 = float(df_display.loc[df_display["age"] == "6-9 Mth", ["croUpdate", "directUpdate"]].sum(axis=1).sum())
+        core_0_6 = float(df_display.loc[df_display["age"].isin(["0-3 Mth", "3-6 Mth"]), "active"].sum())
 
-    st.error(f'Audit "Active" 12+ Month Deals — {format_currency(active_12plus)} marked Active')
-    st.warning(f'Hygiene Sprint: 6–9 Month Bracket — {format_currency(updates_6_9)} in Updates Needed')
-    st.success(f"Velocity Opportunity: 0–6 Month Core — {format_currency(core_0_6)} Active")
+        st.error(f'Audit "Active" 12+ Month Deals — {format_currency(active_12plus)} marked Active')
+        st.warning(f'Hygiene Sprint: 6–9 Month Bracket — {format_currency(updates_6_9)} in Updates Needed')
+        st.success(f"Velocity Opportunity: 0–6 Month Core — {format_currency(core_0_6)} Active")
 
-if show_charts:
     st.divider()
 
 # ----------------------------
