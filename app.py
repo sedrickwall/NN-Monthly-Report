@@ -480,7 +480,25 @@ hist = load_history()
 
 # Normalize snapshot_date in history
 if not hist.empty:
-    hist["snapshot_date"] = pd.to_datetime(hist["snapshot_date"], errors="coerce")
+    hist["snapshot_dt"] = pd.to_datetime(hist["snapshot_date"], errors="coerce")
+    
+    # Calculate ISO week label as fallback
+    iso = hist["snapshot_dt"].dt.isocalendar()
+    hist["week_label"] = iso.year.astype(str) + " W" + iso.week.astype(str).str.zfill(2)
+    
+    # Check if date parsing failed on too many rows
+    bad_rate = hist["snapshot_dt"].isna().mean()
+    
+    if bad_rate > 0.2:
+        # Fallback: use week_label instead of datetime
+        st.warning(f"⚠️ {bad_rate*100:.1f}% of snapshot_date values could not be parsed. Using week labels as fallback.")
+        use_week_label = True
+        hist["snapshot_date"] = hist["week_label"]
+    else:
+        use_week_label = False
+        hist["snapshot_date"] = hist["snapshot_dt"].dt.date
+    
+    # Clean up and sort
     hist = hist.dropna(subset=["snapshot_date"])
     hist = hist.sort_values("snapshot_date")
 
