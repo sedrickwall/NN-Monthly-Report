@@ -556,29 +556,6 @@ if not hist.empty:
             use_container_width=True
         )
 
-# Quick history check in main area to confirm multiple weeks are present
-st.subheader("History check")
-st.write("History rows", len(hist))
-st.write("Unique snapshot dates", hist["snapshot_date"].nunique() if "snapshot_date" in hist.columns else "missing")
-st.dataframe(
-    hist.sort_values("snapshot_date").tail(10),
-    use_container_width=True
-)
-
-# DEBUG: Peek at raw Google Sheet data
-with st.expander("🔍 DEBUG: Raw Google Sheet Data"):
-    try:
-        raw_sheet = fetch_google_sheet_data()
-        st.write(f"Rows from sheet: {len(raw_sheet)}")
-        if len(raw_sheet) > 0:
-            st.write(f"Columns: {raw_sheet.columns.tolist()}")
-            st.write(f"Unique snapshot_date values in sheet: {raw_sheet['snapshot_date'].nunique() if 'snapshot_date' in raw_sheet.columns else 'N/A'}")
-            st.dataframe(raw_sheet.sort_values("snapshot_date"), use_container_width=True)
-        else:
-            st.write("Sheet returned empty")
-    except Exception as e:
-        st.error(f"Could not fetch sheet: {e}")
-
 if st.sidebar.button("Append this snapshot to history"):
     # IMPORTANT: df must be validated and in canonical age order
     # Warn if we're about to overwrite an existing snapshot_date for these ages
@@ -1004,3 +981,30 @@ if show_trends:
 # ----------------------------
 with st.expander("Show data table"):
     st.dataframe(df, use_container_width=True)
+
+# ----------------------------
+# History & Debug Info (Bottom of page)
+# ----------------------------
+st.divider()
+
+st.subheader("History check")
+st.write("History rows", len(hist))
+st.write("Unique snapshot dates", hist["snapshot_date"].nunique() if "snapshot_date" in hist.columns else "missing")
+st.dataframe(
+    hist.sort_values("snapshot_date").tail(10),
+    use_container_width=True
+)
+
+# DEBUG: Peek at raw Google Sheet data
+with st.expander("🔍 DEBUG: Raw Google Sheet Data"):
+    try:
+        raw_sheet = fetch_google_sheet_data()
+        st.write(f"Rows from sheet: {len(raw_sheet)}")
+        if len(raw_sheet) > 0:
+            st.write(f"Columns: {raw_sheet.columns.tolist()}")
+            st.write(f"Unique snapshot_date values in sheet: {raw_sheet['snapshot_date'].nunique() if 'snapshot_date' in raw_sheet.columns else 'N/A'}")
+            st.dataframe(raw_sheet.sort_values("snapshot_date"), use_container_width=True)
+        else:
+            st.write("Sheet returned empty")
+    except Exception as e:
+        st.error(f"Could not fetch sheet: {e}")
