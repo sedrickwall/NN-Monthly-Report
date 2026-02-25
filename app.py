@@ -1,6 +1,8 @@
 import pandas as pd
 import streamlit as st
+import plotly.express as px
 import plotly.io as pio
+import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from fpdf import FPDF
