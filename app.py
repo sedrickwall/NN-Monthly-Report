@@ -344,19 +344,71 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame, h
     elif view_mode == "Trend by week" and hist is not None and len(hist) > 1:
         pdf.cell(0, 8, "Weekly Trends Summary", ln=True)
         pdf.set_font("Helvetica", "", 9)
-        wt = weekly_totals(hist)
-        if len(wt) > 1:
-            pdf.multi_cell(0, 5, f"Weekly data spans from {wt['snapshot_date'].min()} to {wt['snapshot_date'].max()}.")
-            pdf.cell(0, 5, f"Total weeks tracked: {len(wt)}", ln=True)
+        try:
+            wt = weekly_totals(hist)
+            if len(wt) > 1:
+                pdf.multi_cell(0, 5, f"Weekly data spans from {wt['snapshot_date'].min()} to {wt['snapshot_date'].max()}.")
+                pdf.cell(0, 5, f"Total weeks tracked: {len(wt)}", ln=True)
+                pdf.ln(5)
+                
+                # Weekly data table
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.cell(0, 8, "Weekly Pipeline Totals", ln=True)
+                
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_fill_color(200, 200, 200)
+                pdf.cell(30, 6, "Week", border=1, fill=True)
+                pdf.cell(30, 6, "Total ($)", border=1, fill=True)
+                pdf.cell(30, 6, "Active ($)", border=1, fill=True)
+                pdf.cell(30, 6, "Updates ($)", border=1, fill=True)
+                pdf.cell(30, 6, "Hold ($)", border=1, ln=True, fill=True)
+                
+                pdf.set_fill_color(255, 255, 255)
+                for _, row in wt.iterrows():
+                    pdf.cell(30, 6, str(row['snapshot_date'])[:10], border=1)
+                    pdf.cell(30, 6, f"${row['totalValue']/1e6:.1f}M", border=1)
+                    pdf.cell(30, 6, f"${row['active']/1e6:.1f}M", border=1)
+                    pdf.cell(30, 6, f"${row['updatesNeeded']/1e6:.1f}M", border=1)
+                    pdf.cell(30, 6, f"${row['hold']/1e6:.1f}M", border=1, ln=True)
+        except Exception as e:
+            pdf.set_font("Helvetica", "", 9)
+            pdf.multi_cell(0, 5, f"Could not generate weekly trends: {str(e)[:60]}")
     
     elif view_mode == "Trend by month" and hist is not None and len(hist) > 1:
         pdf.cell(0, 8, "Monthly Trends Summary", ln=True)
         pdf.set_font("Helvetica", "", 9)
-        monthly = monthly_rollup_end_of_month(hist)
-        mt = monthly_totals(monthly)
-        if len(mt) > 1:
-            pdf.multi_cell(0, 5, f"Monthly data spans from {mt['month'].min()} to {mt['month'].max()}.")
-            pdf.cell(0, 5, f"Total months tracked: {len(mt)}", ln=True)
+        try:
+            monthly = monthly_rollup_end_of_month(hist)
+            mt = monthly_totals(monthly)
+            if len(mt) > 1:
+                pdf.multi_cell(0, 5, f"Monthly data spans from {mt['month'].min()} to {mt['month'].max()}.")
+                pdf.cell(0, 5, f"Total months tracked: {len(mt)}", ln=True)
+                pdf.ln(5)
+                
+                # Monthly data table
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.cell(0, 8, "Monthly Pipeline Totals", ln=True)
+                
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_fill_color(200, 200, 200)
+                pdf.cell(25, 6, "Month", border=1, fill=True)
+                pdf.cell(25, 6, "Total ($)", border=1, fill=True)
+                pdf.cell(25, 6, "Active ($)", border=1, fill=True)
+                pdf.cell(25, 6, "Updates ($)", border=1, fill=True)
+                pdf.cell(25, 6, "Hold ($)", border=1, fill=True)
+                pdf.cell(20, 6, "Active %", border=1, ln=True, fill=True)
+                
+                pdf.set_fill_color(255, 255, 255)
+                for _, row in mt.iterrows():
+                    pdf.cell(25, 6, str(row['month']), border=1)
+                    pdf.cell(25, 6, f"${row['totalValue']/1e6:.1f}M", border=1)
+                    pdf.cell(25, 6, f"${row['active']/1e6:.1f}M", border=1)
+                    pdf.cell(25, 6, f"${row['updatesNeeded']/1e6:.1f}M", border=1)
+                    pdf.cell(25, 6, f"${row['hold']/1e6:.1f}M", border=1)
+                    pdf.cell(20, 6, f"{row['activePct']:.1f}%", border=1, ln=True)
+        except Exception as e:
+            pdf.set_font("Helvetica", "", 9)
+            pdf.multi_cell(0, 5, f"Could not generate monthly trends: {str(e)[:60]}")
     
     pdf.ln(10)
     pdf.set_font("Helvetica", "", 8)
