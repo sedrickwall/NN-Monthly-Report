@@ -1,7 +1,6 @@
 import pandas as pd
 import streamlit as st
-import plotly.express as px
-import gspread
+import plotly.io as pio
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from fpdf import FPDF
@@ -270,8 +269,8 @@ def fetch_google_sheet_data() -> pd.DataFrame:
         return pd.DataFrame(columns=HISTORY_KEYS + VALUE_COLS)
 
 
-def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -> bytes:
-    """Generate a PDF report of the current dashboard view."""
+def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame, hist: pd.DataFrame = None) -> bytes:
+    """Generate a PDF report with charts and metrics."""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 20)
@@ -280,7 +279,7 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 5, f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", ln=True, align="C")
     pdf.cell(0, 5, f"View: {view_mode}", ln=True, align="C")
-    pdf.ln(5)
+    pdf.ln(10)
     
     # KPI Summary
     pdf.set_font("Helvetica", "B", 14)
@@ -298,7 +297,7 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -
     for metric in metrics:
         pdf.cell(0, 6, f"- {metric}", ln=True)
     
-    pdf.ln(5)
+    pdf.ln(8)
     
     # Age Bucket Summary
     pdf.set_font("Helvetica", "B", 14)
@@ -314,10 +313,114 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame) -
     except:
         pdf.cell(0, 5, "Age bucket data unavailable", ln=True)
     
-    pdf.ln(3)
+    pdf.ln(8)
+    
+    # Add charts if available
+    try:
+        import tempfile
+        import os
+        
+        chart_images = []
+        
+        # Generate current pipeline charts
+        if view_mode == "Current pipeline":
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.cell(0, 8, "Pipeline Composition", ln=True)
+            
+            # Stacked bar chart
+            long_df = df_display.melt(
+                id_vars=["age"],
+                value_vars=["active", "croUpdate", "directUpdate", "hold"],
+                var_name="bucket",
+                value_name="value",
+            )
+            bucket_labels = {
+                "active": "Active",
+                "croUpdate": "CRO Update",
+                "directUpdate": "Direct Update",
+                "hold": "On Hold",
+            }
+            long_df["bucket"] = long_df["bucket"].map(bucket_labels)
+            
+            fig_bar = px.bar(
+                long_df,
+                x="age",
+                y="value",
+                color="bucket",
+                barmode="stack",
+                labels={"age": "Age Bucket", "value": "Value ($)", "bucket": ""},
+            )
+            fig_bar.update_yaxes(showticklabels=False)
+            
+            # Export to PNG
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                pio.write_image(fig_bar, tmp.name, width=900, height=400)
+                if os.path.exists(tmp.name):
+                    pdf.image(tmp.name, x=10, w=190)
+                    chart_images.append(tmp.name)
+                    pdf.ln(2)
+        
+        # Generate trend charts if history available
+        elif view_mode == "Trend by week" and hist is not None and len(hist) > 1:
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.cell(0, 8, "Weekly Trends", ln=True)
+            
+            wt = weekly_totals(hist)
+            if len(wt) > 1:
+                # Total pipeline trend
+                fig_week_total = px.line(
+                    wt,
+                    x="snapshot_date",
+                    y="totalValue",
+                    markers=True,
+                    labels={"totalValue": "Total Pipeline ($)", "snapshot_date": "Week"}
+                )
+                
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    pio.write_image(fig_week_total, tmp.name, width=900, height=400)
+                    if os.path.exists(tmp.name):
+                        pdf.image(tmp.name, x=10, w=190)
+                        chart_images.append(tmp.name)
+                        pdf.ln(2)
+        
+        elif view_mode == "Trend by month" and hist is not None and len(hist) > 1:
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.cell(0, 8, "Monthly Trends", ln=True)
+            
+            monthly = monthly_rollup_end_of_month(hist)
+            mt = monthly_totals(monthly)
+            
+            if len(mt) > 1:
+                # Total pipeline trend
+                fig_total = px.line(
+                    mt,
+                    x="month",
+                    y="totalValue",
+                    markers=True,
+                    labels={"totalValue": "Total Pipeline ($)", "month": "Month"}
+                )
+                
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    pio.write_image(fig_total, tmp.name, width=900, height=400)
+                    if os.path.exists(tmp.name):
+                        pdf.image(tmp.name, x=10, w=190)
+                        chart_images.append(tmp.name)
+                        pdf.ln(2)
+        
+        # Clean up temporary image files
+        for img in chart_images:
+            try:
+                os.unlink(img)
+            except:
+                pass
+    
+    except Exception as e:
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 5, f"(Charts could not be embedded: {str(e)[:50]})", ln=True)
+    
+    pdf.ln(5)
     pdf.set_font("Helvetica", "", 8)
-    pdf.cell(0, 4, "For detailed charts and analysis, view the interactive dashboard at:", ln=True)
-    pdf.cell(0, 4, "https://[your-streamlit-app-url]", ln=True)
+    pdf.cell(0, 4, "For interactive exploration, visit the dashboard.", ln=True)
     
     # Convert to bytes explicitly
     return bytes(pdf.output())
@@ -611,7 +714,7 @@ with col1:
     st.caption(f"Executive Performance & Aging Analytics — {view_mode}")
 with col2:
     try:
-        pdf_bytes = generate_pdf_report(stats, view_mode, df_display)
+        pdf_bytes = generate_pdf_report(stats, view_mode, df_display, hist)
         st.download_button(
             label="📥 Download PDF",
             data=pdf_bytes,
