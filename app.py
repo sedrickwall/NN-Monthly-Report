@@ -272,7 +272,7 @@ def fetch_google_sheet_data() -> pd.DataFrame:
 
 
 def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame, hist: pd.DataFrame = None) -> bytes:
-    """Generate a PDF report with charts and metrics."""
+    """Generate a PDF report with metrics and data tables."""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 20)
@@ -287,17 +287,20 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame, h
     pdf.set_font("Helvetica", "B", 14)
     pdf.cell(0, 8, "Key Metrics", ln=True)
     
-    pdf.set_font("Helvetica", "", 10)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_fill_color(240, 240, 240)
+    
     metrics = [
-        f"Total Pipeline: {format_currency(stats.get('totalValue', 0))}",
-        f"Active: {format_currency(stats.get('activeValue', 0))} ({stats.get('activePct', 0):.1f}%)",
-        f"Updates Needed: {format_currency(stats.get('updatesNeededValue', 0))}",
-        f"On Hold: {format_currency(stats.get('holdValue', 0))}",
-        f"Total Accounts: {stats.get('totalCount', 0):,}",
+        ("Total Pipeline", format_currency(stats.get('totalValue', 0))),
+        ("Active", f"{format_currency(stats.get('activeValue', 0))} ({stats.get('activePct', 0):.1f}%)"),
+        ("Updates Needed", format_currency(stats.get('updatesNeededValue', 0))),
+        ("On Hold", format_currency(stats.get('holdValue', 0))),
+        ("Total Accounts", f"{stats.get('totalCount', 0):,}"),
     ]
     
-    for metric in metrics:
-        pdf.cell(0, 6, f"- {metric}", ln=True)
+    for label, value in metrics:
+        pdf.cell(80, 7, label, border=1, fill=True)
+        pdf.cell(0, 7, value, border=1, ln=True, fill=False)
     
     pdf.ln(8)
     
@@ -308,121 +311,57 @@ def generate_pdf_report(stats: dict, view_mode: str, df_display: pd.DataFrame, h
     pdf.set_font("Helvetica", "", 9)
     try:
         age_summary = df_display.groupby("age")[["active", "croUpdate", "directUpdate", "hold"]].sum()
+        
+        # Header row
+        pdf.set_fill_color(200, 200, 200)
+        pdf.cell(40, 6, "Age Bucket", border=1, fill=True)
+        pdf.cell(40, 6, "Active", border=1, fill=True)
+        pdf.cell(40, 6, "CRO Update", border=1, fill=True)
+        pdf.cell(40, 6, "Direct Update", border=1, fill=True)
+        pdf.cell(40, 6, "Hold", border=1, ln=True, fill=True)
+        
+        # Data rows
+        pdf.set_fill_color(255, 255, 255)
         for age in age_summary.index:
             row = age_summary.loc[age]
-            total = row.sum()
-            pdf.cell(0, 5, f"  {age}: ${total:,.0f} (Active: ${row['active']:,.0f})", ln=True)
-    except:
-        pdf.cell(0, 5, "Age bucket data unavailable", ln=True)
+            pdf.cell(40, 6, str(age)[:15], border=1)
+            pdf.cell(40, 6, f"${row['active']/1e6:.1f}M", border=1)
+            pdf.cell(40, 6, f"${row['croUpdate']/1e6:.1f}M", border=1)
+            pdf.cell(40, 6, f"${row['directUpdate']/1e6:.1f}M", border=1)
+            pdf.cell(40, 6, f"${row['hold']/1e6:.1f}M", border=1, ln=True)
+    except Exception as e:
+        pdf.cell(0, 5, f"Age bucket data unavailable: {str(e)[:50]}", ln=True)
     
     pdf.ln(8)
     
-    # Add charts if available
-    try:
-        import tempfile
-        import os
-        
-        chart_images = []
-        
-        # Generate current pipeline charts
-        if view_mode == "Current pipeline":
-            pdf.set_font("Helvetica", "B", 14)
-            pdf.cell(0, 8, "Pipeline Composition", ln=True)
-            
-            # Stacked bar chart
-            long_df = df_display.melt(
-                id_vars=["age"],
-                value_vars=["active", "croUpdate", "directUpdate", "hold"],
-                var_name="bucket",
-                value_name="value",
-            )
-            bucket_labels = {
-                "active": "Active",
-                "croUpdate": "CRO Update",
-                "directUpdate": "Direct Update",
-                "hold": "On Hold",
-            }
-            long_df["bucket"] = long_df["bucket"].map(bucket_labels)
-            
-            fig_bar = px.bar(
-                long_df,
-                x="age",
-                y="value",
-                color="bucket",
-                barmode="stack",
-                labels={"age": "Age Bucket", "value": "Value ($)", "bucket": ""},
-            )
-            fig_bar.update_yaxes(showticklabels=False)
-            
-            # Export to PNG
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                pio.write_image(fig_bar, tmp.name, width=900, height=400)
-                if os.path.exists(tmp.name):
-                    pdf.image(tmp.name, x=10, w=190)
-                    chart_images.append(tmp.name)
-                    pdf.ln(2)
-        
-        # Generate trend charts if history available
-        elif view_mode == "Trend by week" and hist is not None and len(hist) > 1:
-            pdf.set_font("Helvetica", "B", 14)
-            pdf.cell(0, 8, "Weekly Trends", ln=True)
-            
-            wt = weekly_totals(hist)
-            if len(wt) > 1:
-                # Total pipeline trend
-                fig_week_total = px.line(
-                    wt,
-                    x="snapshot_date",
-                    y="totalValue",
-                    markers=True,
-                    labels={"totalValue": "Total Pipeline ($)", "snapshot_date": "Week"}
-                )
-                
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                    pio.write_image(fig_week_total, tmp.name, width=900, height=400)
-                    if os.path.exists(tmp.name):
-                        pdf.image(tmp.name, x=10, w=190)
-                        chart_images.append(tmp.name)
-                        pdf.ln(2)
-        
-        elif view_mode == "Trend by month" and hist is not None and len(hist) > 1:
-            pdf.set_font("Helvetica", "B", 14)
-            pdf.cell(0, 8, "Monthly Trends", ln=True)
-            
-            monthly = monthly_rollup_end_of_month(hist)
-            mt = monthly_totals(monthly)
-            
-            if len(mt) > 1:
-                # Total pipeline trend
-                fig_total = px.line(
-                    mt,
-                    x="month",
-                    y="totalValue",
-                    markers=True,
-                    labels={"totalValue": "Total Pipeline ($)", "month": "Month"}
-                )
-                
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                    pio.write_image(fig_total, tmp.name, width=900, height=400)
-                    if os.path.exists(tmp.name):
-                        pdf.image(tmp.name, x=10, w=190)
-                        chart_images.append(tmp.name)
-                        pdf.ln(2)
-        
-        # Clean up temporary image files
-        for img in chart_images:
-            try:
-                os.unlink(img)
-            except:
-                pass
-    
-    except Exception as e:
+    # View-specific summary
+    pdf.set_font("Helvetica", "B", 14)
+    if view_mode == "Current pipeline":
+        pdf.cell(0, 8, "Current Pipeline Summary", ln=True)
         pdf.set_font("Helvetica", "", 9)
-        pdf.cell(0, 5, f"(Charts could not be embedded: {str(e)[:50]})", ln=True)
+        pdf.multi_cell(0, 5, f"This report shows the current state of the sales pipeline as of {datetime.now().strftime('%B %d, %Y')}.")
     
-    pdf.ln(5)
+    elif view_mode == "Trend by week" and hist is not None and len(hist) > 1:
+        pdf.cell(0, 8, "Weekly Trends Summary", ln=True)
+        pdf.set_font("Helvetica", "", 9)
+        wt = weekly_totals(hist)
+        if len(wt) > 1:
+            pdf.multi_cell(0, 5, f"Weekly data spans from {wt['snapshot_date'].min()} to {wt['snapshot_date'].max()}.")
+            pdf.cell(0, 5, f"Total weeks tracked: {len(wt)}", ln=True)
+    
+    elif view_mode == "Trend by month" and hist is not None and len(hist) > 1:
+        pdf.cell(0, 8, "Monthly Trends Summary", ln=True)
+        pdf.set_font("Helvetica", "", 9)
+        monthly = monthly_rollup_end_of_month(hist)
+        mt = monthly_totals(monthly)
+        if len(mt) > 1:
+            pdf.multi_cell(0, 5, f"Monthly data spans from {mt['month'].min()} to {mt['month'].max()}.")
+            pdf.cell(0, 5, f"Total months tracked: {len(mt)}", ln=True)
+    
+    pdf.ln(10)
     pdf.set_font("Helvetica", "", 8)
-    pdf.cell(0, 4, "For interactive exploration, visit the dashboard.", ln=True)
+    pdf.set_text_color(100, 100, 100)
+    pdf.multi_cell(0, 4, "For interactive charts and detailed analysis, visit the Sales Pipeline Dashboard. Charts are optimized for web viewing where full interactivity is available.")
     
     # Convert to bytes explicitly
     return bytes(pdf.output())
